@@ -4,7 +4,9 @@ node {
     stage 'Checkout'
  
     // // Get some code from a GitHub repository
-    git credentialsId: "${env.GITHUB_CREDENTIALS}", url: "${env.GITHUB_REPO}"
+    //git credentialsId: "${env.GITHUB_CREDENTIALS}", url: "${env.GITHUB_REPO}"
+    git url: 'git@github.com:ibata/devOps.git'
+
 
     // Setup the AWS Credentials
     withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: "${env.AWS_CREDENTIALS}",
