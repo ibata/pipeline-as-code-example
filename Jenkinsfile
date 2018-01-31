@@ -1,46 +1,112 @@
-#!groovy
+#!/bin/bash -e
 
-// Setup the AWS Credentials
-wrappers {
-  credentialsBinding {
-    amazonWebServicesCredentialsBinding {
-      accessKeyVariable("AWS_ACCESS_KEY_ID")
-      secretKeyVariable("AWS_SECRET_ACCESS_KEY")
-      credentialsId("47536ade-f5cb-4a94-b5ab-3437ba578de5")
-    }
-  }
+PROJECT="$(basename `pwd`)"
+BUCKET="tfluc-infrastructure-state"
+
+init() {
+ if [ -d .terraform ]; then
+   if [ -e .terraform/terraform.tfstate ]; then
+     echo "Remote state already exist!"
+     if [ -z $IGNORE_INIT ]; then
+       exit 1
+     fi
+   fi
+ fi
+
+ terraform remote config \
+   -backend=s3 \
+   -backend-config="bucket=${BUCKET}" \
+   -backend-config="key=${PROJECT}/terraform.tfstate" \
+   -backend-config="region=us-west-1"
+
 }
 
+while getopts "i" opt; do
+ case "$opt" in
+   i)
+     IGNORE_INIT="true"
+     ;;
+ esac
+done
+
+shift $((OPTIND-1))
+
+Init
+
+Here is the code you need for your Jenkins job:
+
 node {
-    // Get the Terraform tool.
-    def tfHome = tool name: 'Terraform', type: 'com.cloudbees.jenkins.plugins.customtools.CustomTool'
-    env.PATH = "${tfHome}:${env.PATH}"
 
-  stage ('Checkout') {
-    git url: 'git@github.com:ibata/devOps.git'
-  }
+   // Mark the code checkout 'Checkout'....
+   stage 'Checkout'
 
-  stage ('Terraform Plan') {
-    sh 'terraform plan -no-color -out=create.tfplan'
-  }
+   // // Get some code from a GitHub repository
+   git url: 'git@github.com:ibata/devOps.git'
 
-  // Optional wait for approval
-  input 'Deploy stack?'
+   // Get the Terraform tool.
+   def tfHome = tool name: 'Terraform', type: 'com.cloudbees.jenkins.plugins.customtools.CustomTool'
+   env.PATH = "${tfHome}:${env.PATH}"
+   wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
 
-  stage ('Terraform Apply') {
-    sh 'terraform apply -no-color create.tfplan'
-  }
-
-  stage ('Post Run Tests') {
-    echo "Insert your infrastructure test of choice and/or application validation here."
-    sleep 2
-    sh 'terraform show'
-  }
-
-  stage ('Notification') {
-    mail from: "jenkins@mycompany.com",
-         to: "devopsteam@mycompany.com",
-         subject: "Terraform build complete",
-         body: "Jenkins job ${env.JOB_NAME} - build ${env.BUILD_NUMBER} complete"
-  }
+           // Mark the code build 'plan'....
+           stage name: 'Plan', concurrency: 1
+           // Output Terraform version
+           sh "terraform --version"
+           //Remove the terraform state file so we always start from a clean state
+           if (fileExists(".terraform/terraform.tfstate")) {
+               sh "rm -rf .terraform/terraform.tfstate"
+           }
+           if (fileExists("status")) {
+               sh "rm status"
+           }
+           sh "./init"
+           sh "terraform get"
+           sh "echo \$PWD"
+           sh "whoami"
+           sh "terraform plan -out=plan.out;echo \$? > status"
+           def exitCode = readFile('status').trim()
+           def apply = false
+           echo "Terraform Plan Exit Code: ${exitCode}"
+           if (exitCode == "0") {
+               echo "Terraform Plan Exit Code: ${exitCode}"
+               slackSend channel: '#midwesthackerschool', color: '#0080ff', message: "Plan Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
+               currentBuild.result = 'SUCCESS'
+           }
+           if (exitCode == "1") {
+               sh "terraform destroy -force"
+               echo "Terraform Plan Exit Code: ${exitCode}"
+               slackSend channel: '#midwesthackerschool', color: '#0080ff', message: "Infrastructure Destroyed: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
+               currentBuild.result = 'FAILURE'
+           }
+           if (exitCode == "0") {
+               echo "Terraform Plan Exit Code: ${exitCode}"
+               //stash name: "plan", includes: "plan.out"
+               slackSend channel: '#midwesthackerschool', color: 'good', message: "Plan Awaiting Approval: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
+               try {
+                   input message: 'Apply Plan?', ok: 'Apply'
+                   apply = true
+               } catch (err) {
+                   slackSend channel: '#midwesthackerschool', color: 'warning', message: "Plan Discarded: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
+                   apply = false
+                   sh "terraform destroy -force"
+                   currentBuild.result = 'UNSTABLE'
+               }
+           }
+           if (apply) {
+               stage name: 'Apply', concurrency: 1
+               //unstash 'plan'
+               if (fileExists("status.apply")) {
+                   sh "rm status.apply"
+               }
+               sh 'terraform apply;echo \$? > status.apply'
+               def applyExitCode = readFile('status.apply').trim()
+               if (applyExitCode == "0") {
+                   slackSend channel: '#midwesthackerschool', color: 'good', message: "Changes Applied ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
+               } else {
+                   slackSend channel: '#midwesthackerschool', color: 'danger', message: "Apply Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
+                   sh "terraform destroy -force"
+                   currentBuild.result = 'FAILURE'
+               }
+           }
+   }
 }
