@@ -7,8 +7,8 @@ properties([ parameters([
 ]), pipelineTriggers([]) ])
 
 // Environment Variables
-env.AWS_ACCESS_KEY_ID = 'AKIAJWXP3F57JSSFK4HA'
-env.AWS_SECRET_ACCESS_KEY = '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'
+env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
+env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
 
 node {
     def tfHome = tool name: 'Terraform', type: 'com.cloudbees.jenkins.plugins.customtools.CustomTool'
