@@ -7,14 +7,15 @@ properties([ parameters([
 ]), pipelineTriggers([]) ])
 
 // Environment Variables
-env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
-env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
+env.AWS_ACCESS_KEY_ID = 'AKIAJWXP3F57JSSFK4HA'
+env.AWS_SECRET_ACCESS_KEY = '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'
 
 node {
-  env.PATH += ":/opt/terraform_0.7.13/"
+    def tfHome = tool name: 'Terraform', type: 'com.cloudbees.jenkins.plugins.customtools.CustomTool'
+    env.PATH = "${tfHome}:${env.PATH}"
 
   stage ('Checkout') {
-    checkout scm
+    git url: 'git@github.com:ibata/devOps.git'
   }
 
   stage ('Terraform Plan') {
