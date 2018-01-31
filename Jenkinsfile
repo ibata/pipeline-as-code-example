@@ -22,7 +22,7 @@ node {
            if (fileExists("status")) {
                sh "rm status"
            }
-           sh "./init"
+           sh "set +e; ./init.sh"
            sh "terraform get"
            sh "echo \$PWD"
            sh "whoami"
