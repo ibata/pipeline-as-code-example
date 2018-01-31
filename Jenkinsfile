@@ -7,13 +7,6 @@ node {
     //git credentialsId: "${env.GITHUB_CREDENTIALS}", url: "${env.GITHUB_REPO}"
     git url: 'git@github.com:ibata/devOps.git'
 
-
-    // Setup the AWS Credentials
-    withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: "${env.AWS_CREDENTIALS}",
-                      usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
-        env.AWS_ACCESS_KEY_ID = "$USERNAME"
-        env.AWS_SECRET_ACCESS_KEY = "$PASSWORD"
-    }
     // Get the Terraform tool.
     def tfHome = tool name: 'Terraform', type: 'com.cloudbees.jenkins.plugins.customtools.CustomTool'
     env.PATH = "${tfHome}:${env.PATH}"
