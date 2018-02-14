@@ -1,68 +1,123 @@
-node {
- 
-    // Mark the code checkout 'Checkout'....
-    stage 'Checkout'
- 
-    // // Get some code from a GitHub repository
-    //git credentialsId: "${env.GITHUB_CREDENTIALS}", url: "${env.GITHUB_REPO}"
-    git url: 'git@github.com:ibata/devOps.git'
+//Jenkinsfile (Declarative Pipeline)
+pipeline {
+    agent { label 'master' }
+    environment {
+        AWS_ACCESS_KEY_ID     = credentials('jenkins-aws-secret-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('jenkins-aws-secret-access-key')
+        AWS_DEFAULT_REGION = credentials('jenkins-aws-default-region')
+        TF_WARN_OUTPUT_ERRORS = 1
+    }
+    //parameters {
+      //  string(name: 'TFWORKSPACE', defaultValue: 'xxxx', description: 'Enter Terraform workspace')
+  //  }
 
-    // Get the Terraform tool.
-    def tfHome = tool name: 'Terraform', type: 'com.cloudbees.jenkins.plugins.customtools.CustomTool'
-    env.PATH = "${tfHome}:${env.PATH}"
-    wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
- 
-            // Mark the code build 'plan'....
-            stage name: 'Plan', concurrency: 1
-            // Output Terraform version
-            sh "terraform --version"
-            //Remove the terraform state file so we always start from a clean state
-            if (fileExists(".terraform/terraform.tfstate")) {
-                sh "rm -rf .terraform/terraform.tfstate"
+    stages {
+        stage('Checkout') {
+            agent { label 'master' }
+            steps {
+                git branch: 'master', credentialsId: '8377b579-f079-40d7-b4fb-adca444343d0', url: 'https://github.anaplan.com/terraform/tf_popidol.git'
             }
-            if (fileExists("status")) {
-                sh "rm status"
-            }
-            sh "./jenkins-init"
-            sh "terraform get"
-            sh "set +e; terraform plan -out=plan.out --var-file=environments/${env.PROJECT}/${env.PROJECT}.tfvars -detailed-exitcode; echo \$? > status"
-            def exitCode = readFile('status').trim()
-            def apply = false
-            echo "Terraform Plan Exit Code: ${exitCode}"
-            if (exitCode == "0") {
-                currentBuild.result = 'SUCCESS'
-            }
-            if (exitCode == "1") {
-                // slackSend channel: '#ci', color: '#0080ff', message: "Plan Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
-                currentBuild.result = 'FAILURE'
-            }
-            if (exitCode == "2") {
-                stash name: "plan", includes: "plan.out"
-                // slackSend channel: '#ci', color: 'good', message: "Plan Awaiting Approval: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
-                try {
-                    input message: 'Apply Plan?', ok: 'Apply'
-                    apply = true
-                } catch (err) {
-                    // slackSend channel: '#ci', color: 'warning', message: "Plan Discarded: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
-                    apply = false
-                    currentBuild.result = 'UNSTABLE'
+        }
+        stage('Prep') {
+            agent { label 'master' }
+            steps {
+                withCredentials([file(credentialsId: 'lucskytfvars', variable: 'SECRETFILE')]) {
+                      sh '''
+                          set +x
+                          cat  "${SECRETFILE}" > lucsky.tfvars
+                      '''
+                }
+                withCredentials([file(credentialsId: 'cheflibatapem', variable: 'CHEFLIBATAPEMFILE')]) {
+                      sh '''
+                          set +x
+                          cat  "${CHEFLIBATAPEMFILE}" > /tmp/libata.pem
+                      '''
+                }
+                withCredentials([file(credentialsId: 'chefdonotdelete', variable: 'CHEFDONOTDELETEFILE')]) {
+                      sh '''
+                          set +x
+                          cat  "${CHEFDONOTDELETEFILE}" > /tmp/do-not-delete
+                      '''
+                }
+                withCredentials([file(credentialsId: 'sshanaplanpem', variable: 'SSHANAPLANPEMFILE')]) {
+                      sh '''
+                          set +x
+                          cat  "${SSHANAPLANPEMFILE}" > /tmp/anaplan.pem
+                      '''
+                }
+                withCredentials([file(credentialsId: 'sshidrsainsecure', variable: 'SSHIDRSAINSECUREFILE')]) {
+                      sh '''
+                          set +x
+                          cat  "${SSHIDRSAINSECUREFILE}" > /tmp/id_rsa.insecure
+                      '''
                 }
             }
- 
-            if (apply) {
-                stage name: 'Apply', concurrency: 1
-                unstash 'plan'
-                if (fileExists("status.apply")) {
-                    sh "rm status.apply"
-                }
-                sh 'set +e; terraform apply plan.out; echo \$? > status.apply'
-                def applyExitCode = readFile('status.apply').trim()
-                if (applyExitCode == "0") {
-                    // slackSend channel: '#ci', color: 'good', message: "Changes Applied ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"    
-                } else {
-                    // slackSend channel: '#ci', color: 'danger', message: "Apply Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER} ()"
-                    currentBuild.result = 'FAILURE'
+        }
+        stage('Apply') {
+            agent { label 'master' }
+            steps {
+                wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+
+                    sh '''
+                        /opt/terraform init
+                        # /opt/terraform workspace new lucsky
+                        /opt/terraform workspace select lucsky
+                        /opt/terraform workspace show
+                        /opt/terraform apply  -input=false -auto-approve -var-file=lucsky.tfvars
+                    '''
                 }
             }
+            post {
+              success {
+
+                emailext (
+                    subject: "SUCCESSFUL: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                    body: """<p>SUCCESSFUL: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]':</p>
+                      <p>Check console output at &QUOT;<a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>&QUOT;</p>""",
+                    recipientProviders: [[$class: 'DevelopersRecipientProvider']]
+                  )
+              }
+
+              failure {
+                emailext (
+                    subject: "FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                    body: """<p>FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]':</p>
+                      <p>Check console output at &QUOT;<a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>&QUOT;</p>""",
+                    recipientProviders: [[$class: 'DevelopersRecipientProvider']]
+                  )
+              }
+            }
+        }
+        stage('Test') {
+           agent { label 'master' }
+           steps {
+                 sh '''
+                    sleep 20
+                 '''
+
+           }
+           post {
+             success {
+
+               emailext (
+                   subject: "SUCCESSFUL: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                   body: """<p>SUCCESSFUL: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]':</p>
+                     <p>Check console output at &QUOT;<a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>&QUOT;</p>""",
+                   recipientProviders: [[$class: 'DevelopersRecipientProvider']]
+                 )
+             }
+
+             failure {
+               emailext (
+                   subject: "FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                   body: """<p>FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]':</p>
+                     <p>Check console output at &QUOT;<a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a>&QUOT;</p>""",
+                   recipientProviders: [[$class: 'DevelopersRecipientProvider']]
+                 )
+             }
+           }
+
+        }
+
     }
 }
